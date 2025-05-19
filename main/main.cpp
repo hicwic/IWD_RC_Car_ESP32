@@ -1,33 +1,3 @@
-// #include "Arduino.h"
-// #include "Adafruit_NeoPixel.h"
-
-// #include "esp_pm.h"
-
-// #define LED_PIN    21      // Ta LED RGB est sur GPIO 21
-// #define LED_COUNT  1
-
-// Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
-
-
-// extern "C" void app_main()
-// {
-//     initArduino();
-
-//     esp_pm_lock_handle_t power_lock;
-//     esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "no_light_sleep", &power_lock);
-//     esp_pm_lock_acquire(power_lock);
-    
-//     pixel.begin();
-//     pixel.setBrightness(50); // Réduit l’intensité
-
-//     // Couleur rouge
-//     pixel.setPixelColor(0, pixel.Color(0, 255, 0));
-//     pixel.show();
-
-//     Serial.println("LED RGB allumée en ROUGE (GPIO 21)");
-// }
-
-
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
@@ -47,7 +17,7 @@
 
 // === CONFIG ===
 #define TAG "RC_ESC"
-#define LOG_LEVEL ESP_LOG_INFO
+#define LOG_LEVEL ESP_LOG_NONE
 
 #define NUM_CHANNELS 4
 const gpio_num_t chPins[NUM_CHANNELS] = {GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4};
@@ -73,23 +43,26 @@ const gpio_num_t chPins[NUM_CHANNELS] = {GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPI
 #define LED_PIN    21      // Embedded RGB Led (ESP32-s3 Zero)
 #define LED_COUNT  1
 
+// Var for using led as indicator
 Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// === Variables globales ===
+// Vars for PWM input
 volatile int pulseWidth[NUM_CHANNELS] = {PWM_MID, PWM_MID, PWM_MID, PWM_MID};
 volatile int pulseStart[NUM_CHANNELS] = {0};
 volatile bool pulseStarted[NUM_CHANNELS] = {false};
 
+// ESCs variables
 DShotRMT leftESC(ESC_LEFT_GPIO);
 DShotRMT rightESC(ESC_RIGHT_GPIO);
 
 volatile uint16_t dshotValueLeft = 0;
 volatile uint16_t dshotValueRight = 0;
 
+// power management
 esp_pm_lock_handle_t power_lock;
 
-// === Utils ===
 
+// === Utils ===
 int pwmToPercent(int pwm) {
     if (pwm < PWM_MIN) pwm = PWM_MIN;
     if (pwm > PWM_MAX) pwm = PWM_MAX;
@@ -111,7 +84,7 @@ int velocityToDShotCommand(int velocity) {
     }
 }
 
-// === ISR lecture PWM ===
+// === ISR read PWM ===
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     int ch = (int)arg;
     int level = gpio_get_level(chPins[ch]);
@@ -137,7 +110,7 @@ void dshotTask(void *pvParameters) {
     while (true) {
         leftESC.send_dshot_value(dshotValueLeft);
         rightESC.send_dshot_value(dshotValueRight);
-        vTaskDelay(pdMS_TO_TICKS(2));  // 2 ms = 500 Hz (fréquence Betaflight)
+        vTaskDelay(pdMS_TO_TICKS(5));  // 5 ms = 200 Hz
     }
 }
 
@@ -180,12 +153,15 @@ void control_task(void* arg) {
         const int mixSign = INVERT_STEERING_LOGIC ? -1 : 1;
 
         // === THROTTLE LOGIC ===
+        //Moving foward, we set target velocity to throttle. Reverse is reinit
         if (throttlePercent > DEADZONE) {
             reverseMode = false;
             readyForReverse = false;
             neutralStartTime = 0;
             targetVelocity = throttlePercent;
-        } else if (throttlePercent >= -DEADZONE && throttlePercent <= DEADZONE) {
+        } 
+        //Deadzone, targetVelocity is 0. We start the neutral timer (time before we can reverse)
+        else if (throttlePercent >= -DEADZONE && throttlePercent <= DEADZONE) {
             reverseMode = false;
             ramping = false;
             targetVelocity = 0;
@@ -198,13 +174,17 @@ void control_task(void* arg) {
                 neutralStartTime = 0;
                 readyForReverse = false;
             }
-        } else {
+        } 
+        else {
+            // we brake if pushing trigger, and not ready for reverse. TargetVelocity to 0, cancel ramping.
             if (!readyForReverse) {
                 reverseMode = false;
                 ramping = false;
                 baseVelocity = 0;
                 targetVelocity = 0;
-            } else {
+            } 
+            // if ready for reverse, we set targetVelocity to throttle (must be < 0)
+            else {
                 reverseMode = true;
                 targetVelocity = throttlePercent;
             }
@@ -291,9 +271,9 @@ void control_task(void* arg) {
         // === LED BLINKING FEEDBACK ===
         if (baseVelocity != 0.0) {
             int direction = baseVelocity > 0 ? 1 : -1;
-            float frequencyHz = abs(baseVelocity) / 10.0; // Entre 0 et 10 Hz
-            frequencyHz = constrain(frequencyHz, 0.5, 10.0); // éviter 0 Hz (division par 0)
-            float period = 1000.0 / frequencyHz; // période en ms
+            float frequencyHz = abs(baseVelocity) / 10.0; // between 0 et 10 Hz
+            frequencyHz = constrain(frequencyHz, 0.5, 10.0); // avoid 0 Hz (divide by 0)
+            float period = 1000.0 / frequencyHz; // convert to ms
             float halfPeriod = period / 2.0;
 
             if (millis() - lastBlinkTime >= halfPeriod) {
@@ -303,9 +283,9 @@ void control_task(void* arg) {
 
             if (ledState) {
                 if (direction > 0) {
-                    pixel.setPixelColor(0, pixel.Color(0, 255, 0)); // vert
+                    pixel.setPixelColor(0, pixel.Color(0, 255, 0)); // move forward = blinking green
                 } else {
-                    pixel.setPixelColor(0, pixel.Color(255, 255, 255)); // blanc
+                    pixel.setPixelColor(0, pixel.Color(255, 255, 255)); // move backward = blinking white
                 }
             } else {
                 pixel.setPixelColor(0, pixel.Color(0, 0, 0)); // LED off
@@ -314,7 +294,7 @@ void control_task(void* arg) {
 
         } else {
             ledState = false;
-            pixel.setPixelColor(0, pixel.Color(255, 0, 0)); // rouge fixe
+            pixel.setPixelColor(0, pixel.Color(255, 0, 0)); // stopped = fix red
             pixel.show();
         }
 
@@ -340,8 +320,12 @@ extern "C" void app_main(void) {
 
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    pixel.begin(); // Initialiser la bande LED
+    pixel.begin(); // Init Led
     pixel.setBrightness(50); 
+    pixel.setPixelColor(0, pixel.Color(0, 0, 255));
+    pixel.show();
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     esp_log_level_set(TAG, LOG_LEVEL);
 
@@ -371,9 +355,6 @@ extern "C" void app_main(void) {
 
     // Start Dshot update loop
     xTaskCreatePinnedToCore(dshotTask, "dShot_task", 1024, NULL, 1, NULL, 1);
-
-    // Hold DSHOT_CMD_MOTOR_STOP for 1s to arm ESCs
-    vTaskDelay(pdMS_TO_TICKS(1000));
 
     // Start control loop
     xTaskCreatePinnedToCore(control_task, "control_task", 4096, NULL, 5, NULL, 1);
