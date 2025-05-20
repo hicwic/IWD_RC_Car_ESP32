@@ -15,6 +15,10 @@
 #include "esp_log.h"
 #include "esp_pm.h"
 
+#include "wifi.h"
+#include "metrics.h"
+#include "webserver.h"
+
 // === CONFIG ===
 #define TAG "RC_ESC"
 #define LOG_LEVEL ESP_LOG_INFO
@@ -311,6 +315,9 @@ void control_task(void* arg) {
 }
 
 
+Metrics metrics;
+WebServer* server;
+
 // === Setup ===
 extern "C" void app_main(void) {
     initArduino();
@@ -322,6 +329,11 @@ extern "C" void app_main(void) {
     esp_pm_lock_acquire(power_lock);
 
     vTaskDelay(pdMS_TO_TICKS(2000));
+
+    Wifi::startSoftAP("ESP_Metrics", "12345678");
+    server = new WebServer(metrics);
+    server->start();
+
 
     pixel.begin(); // Init Led
     pixel.setBrightness(50); 
