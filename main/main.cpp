@@ -17,7 +17,7 @@
 
 // === CONFIG ===
 #define TAG "RC_ESC"
-#define LOG_LEVEL ESP_LOG_NONE
+#define LOG_LEVEL ESP_LOG_INFO
 
 #define NUM_CHANNELS 4
 const gpio_num_t chPins[NUM_CHANNELS] = {GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4};
@@ -310,15 +310,18 @@ void control_task(void* arg) {
     }
 }
 
+
 // === Setup ===
 extern "C" void app_main(void) {
     initArduino();
+
+    esp_log_level_set(TAG, LOG_LEVEL);
 
     //create power lock to prevent ESP to go in light sleep (cannot handle leds in light sleep)
     esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "no_light_sleep", &power_lock);
     esp_pm_lock_acquire(power_lock);
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     pixel.begin(); // Init Led
     pixel.setBrightness(50); 
@@ -345,18 +348,22 @@ extern "C" void app_main(void) {
         gpio_isr_handler_add(chPins[i], gpio_isr_handler, (void*)i);
     }
 
+
     // Init Dshot ESCs
-    leftESC.begin(DSHOT600, NO_BIDIRECTION , 12);
-    rightESC.begin(DSHOT600, NO_BIDIRECTION, 12);
+    leftESC.begin(DSHOT300, NO_BIDIRECTION , 12);
+    rightESC.begin(DSHOT300, NO_BIDIRECTION, 12);
+
 
     // Init with 0 value to arm ESCs
     dshotValueLeft = DSHOT_CMD_MOTOR_STOP;
     dshotValueRight = DSHOT_CMD_MOTOR_STOP;
 
     // Start Dshot update loop
-    xTaskCreatePinnedToCore(dshotTask, "dShot_task", 1024, NULL, 1, NULL, 1);
+    xTaskCreate(dshotTask, "dShot_task", 2048, NULL, 5, NULL);
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     // Start control loop
-    xTaskCreatePinnedToCore(control_task, "control_task", 4096, NULL, 5, NULL, 1);
+    xTaskCreate(control_task, "control_task", 4096, NULL, 5, NULL);
 
 }
