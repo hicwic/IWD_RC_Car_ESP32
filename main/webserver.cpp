@@ -5,15 +5,10 @@
 
 static const char* TAG = "WebServer";
 
-WebServer* WebServer::instance_ = nullptr;
 
-WebServer::WebServer(Metrics& metrics) : metrics_(metrics) {
-    instance_ = this;
-}
-
-WebServer::~WebServer() {
-    stop();
-    instance_ = nullptr;
+WebServer& WebServer::getInstance() {
+    static WebServer instance;  // 🔒 Unique instance (thread-safe avec C++11+)
+    return instance;
 }
 
 esp_err_t WebServer::start() {
@@ -45,6 +40,15 @@ esp_err_t WebServer::start() {
     };
     httpd_register_uri_handler(server_, &ws_uri);
 
+    httpd_uri_t velocity_uri = {
+        .uri = "/velocity",
+        .method = HTTP_GET,
+        .handler = velocity_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server_, &velocity_uri);
+    
+
     return ESP_OK;
 }
 
@@ -53,30 +57,6 @@ esp_err_t WebServer::stop() {
         return httpd_stop(server_);
     }
     return ESP_OK;
-}
-
-void WebServer::add_client(httpd_req_t* req) {
-    if (client_count_ < max_clients_) {
-        clients_[client_count_++] = req;
-        ESP_LOGI(TAG, "Client added, total: %d", client_count_);
-    } else {
-        ESP_LOGW(TAG, "Max clients reached, reject new client");
-    }
-}
-
-
-void WebServer::remove_client(httpd_req_t* req) {
-    for (int i = 0; i < client_count_; i++) {
-        if (clients_[i] == req) {
-            for (int j = i; j < client_count_ - 1; j++) {
-                clients_[j] = clients_[j + 1];
-            }
-            clients_[client_count_ - 1] = nullptr;
-            client_count_--;
-            ESP_LOGI(TAG, "Client removed, total: %d", client_count_);
-            break;
-        }
-    }
 }
 
 
@@ -88,19 +68,22 @@ void WebServer::send_to_all_clients(const std::string& json) {
     ws_pkt.payload = (uint8_t*)json.c_str();
     ws_pkt.len = json.length();
 
-    for (int i = 0; i < client_count_; i++) {
-        httpd_req_t* client_req = clients_[i];
-        int sockfd = httpd_req_to_sockfd(client_req);
+    int i = 0;
+    while (i < client_count_) {
+        int sockfd = client_fds_[i];
         esp_err_t ret = httpd_ws_send_frame_async(server_, sockfd, &ws_pkt);
+
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to send async frame to client %d: %s", i, esp_err_to_name(ret));
+            ESP_LOGW(TAG, "Client %d déconnecté (%s), on le supprime.", i, esp_err_to_name(ret));
+            // Supprimer le client de la liste
+            for (int j = i; j < client_count_ - 1; ++j) {
+                client_fds_[j] = client_fds_[j + 1];
+            }
+            client_count_--;
+        } else {
+            i++;
         }
     }
-}
-
-void WebServer::send_metrics() {
-    std::string json = metrics_.to_json();
-    send_to_all_clients(json);
 }
 
 esp_err_t WebServer::root_get_handler(httpd_req_t *req) {
@@ -137,58 +120,24 @@ ws.onclose = function() {
     return ESP_OK;
 }
 
+
+esp_err_t WebServer::velocity_handler(httpd_req_t *req) {
+    extern const char velocity_html_start[] asm("_binary_velocity_html_start");
+    extern const char velocity_html_end[] asm("_binary_velocity_html_end");    
+    const size_t html_len = velocity_html_end - velocity_html_start;
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, velocity_html_start, html_len);
+}
+
 esp_err_t WebServer::ws_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "WebSocket client connected");
+    int fd = httpd_req_to_sockfd(req);
+    WebServer& ws = WebServer::getInstance();
 
-    if (!instance_) {
-        ESP_LOGE(TAG, "WebServer instance not set!");
-        return ESP_FAIL;
+    if (ws.client_count_ < MAX_CLIENTS) {
+        ws.client_fds_[ws.client_count_++] = fd;
+        ESP_LOGI(TAG, "Client WS connecté, socket: %d, total: %d", fd, ws.client_count_);
     }
 
-    instance_->add_client(req);
-
-    while (true) {
-        httpd_ws_frame_t ws_pkt = {
-            .final = true,
-            .fragmented = false,
-            .type = HTTPD_WS_TYPE_TEXT,
-            .payload = nullptr,
-            .len = 0
-        };
-
-        // Étape 1 : lire l'entête du frame WebSocket (sans payload)
-        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
-        if (ret != ESP_OK) {
-            if (ret == ESP_ERR_INVALID_ARG || ret == ESP_ERR_HTTPD_INVALID_REQ) {
-                ESP_LOGI(TAG, "Client WebSocket déconnecté (err=%d)", ret);
-                break;
-            } else {
-                ESP_LOGD(TAG, "Lecture WebSocket échouée (err=%d), on réessaie", ret);
-                vTaskDelay(pdMS_TO_TICKS(50));
-                continue;
-            }
-        }
-
-        if (ws_pkt.len > 0) {
-            // Étape 2 : allouer un buffer pour recevoir le message
-            uint8_t buf[128] = {0};  // ajuste si besoin
-            if (ws_pkt.len >= sizeof(buf)) {
-                ESP_LOGW(TAG, "WebSocket frame too big (%u bytes), skipped", ws_pkt.len);
-                continue;
-            }
-
-            ws_pkt.payload = buf;
-            ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "Received WS message: %.*s", ws_pkt.len, buf);
-                // Ici, tu pourrais parser `buf` si nécessaire
-            }
-        }
-
-        // ✅ Pause minimale dans tous les cas
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    instance_->remove_client(req);
+    // On ne lit rien, on ne fait que envoyer en push
     return ESP_OK;
 }

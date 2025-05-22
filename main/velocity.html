@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RC Car Velocity</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h2>RC Car Velocity</h2>
+  <canvas id="telemetryChart" width="800" height="400"></canvas>
+
+  <script>
+    const ctx = document.getElementById('telemetryChart').getContext('2d');
+
+    const MAX_WINDOW_MS = 60 * 1000; // 1 minutes
+    let sessionStartTime = null;
+
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Target Velocity', borderColor: 'orange', data: [], fill: false },
+          { label: 'Base Velocity', borderColor: 'purple', data: [], fill: false },
+          { label: 'Left Velocity', borderColor: 'red', data: [], fill: false },
+          { label: 'Right Velocity', borderColor: 'blue', data: [], fill: false },
+        ]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Temps (min:sec)' },
+            ticks: {
+              callback: function(value, index, values) {
+                return msToMinSec(value);
+              }
+            }
+          },
+          y: {
+            min: -100,
+            max: 100,
+            title: { display: true, text: 'Vélocité / Throttle (%)' }
+          }
+        }
+      }
+    });
+
+    function msToMinSec(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    let ws;
+
+    function startWebSocket() {    
+      ws = new WebSocket(`ws://${location.host}/ws`);
+
+      ws.onopen = () => {
+        console.log("✅ WebSocket connecté !");
+      };
+
+      ws.onclose = (event) => {
+        console.warn(`⚠️ WebSocket fermé (code=${event.code}). Reconnexion dans 2s...`);
+        setTimeout(startWebSocket, 2000);
+      };
+
+      ws.onerror = (err) => {
+        console.error("❌ WebSocket erreur :", err);
+        ws.close(); // ferme proprement pour déclencher le onclose
+      };
+    
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const now = data.time;
+
+        if (!sessionStartTime) {
+          sessionStartTime = now;
+        }
+
+        const relativeTime = now - sessionStartTime;
+        const cutoff = relativeTime - MAX_WINDOW_MS;
+
+        chart.data.labels.push(relativeTime);
+        chart.data.labels = chart.data.labels.filter(t => t >= cutoff);
+
+        chart.data.datasets[0].data.push(data.targetVelocity);
+        chart.data.datasets[1].data.push(data.baseVelocity);
+        chart.data.datasets[2].data.push(data.leftVelocity);
+        chart.data.datasets[3].data.push(data.rightVelocity);
+
+        chart.data.datasets.forEach((ds) => {
+          while (ds.data.length > chart.data.labels.length) {
+            ds.data.shift();
+          }
+        });
+
+        chart.update('none');
+      };
+    }
+
+    startWebSocket();    
+  </script>
+
+</body>
+</html>

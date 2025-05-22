@@ -66,10 +66,6 @@ volatile uint16_t dshotValueRight = 0;
 // power management
 esp_pm_lock_handle_t power_lock;
 
-Metrics metrics;
-WebServer* server;
-
-
 // === Utils ===
 int pwmToPercent(int pwm) {
     if (pwm < PWM_MIN) pwm = PWM_MIN;
@@ -320,12 +316,23 @@ void control_task(void* arg) {
 
         // Send telemetry data to webserver
         timeSinceLastMetrics += deltaTimeS;
-        if (timeSinceLastMetrics >= 1.0f) {
-            MetricsData mData;
-            mData.deltaTimeS = deltaTimeS;
-            mData.loopTimeMs = loopTime;
-            metrics.update(mData);
-            server->send_metrics();
+        if (timeSinceLastMetrics >= 0.5f) {
+            //MetricsData mData;
+            //mData.deltaTimeS = deltaTimeS;
+            //mData.loopTimeMs = loopTime;
+            //metrics.update(mData);
+            //server->send_metrics();
+
+            std::string json = "{"
+                "\"time\": " + std::to_string(esp_timer_get_time() / 1000) + "," +
+                "\"targetVelocity\": " + std::to_string(targetVelocity) + "," +
+                "\"baseVelocity\": " + std::to_string(baseVelocity) + "," +
+                "\"leftVelocity\": " + std::to_string(leftVelocity) + "," +
+                "\"rightVelocity\": " + std::to_string(rightVelocity) +
+            "}";
+
+            WebServer::getInstance().send_to_all_clients(json);
+
 
             timeSinceLastMetrics = 0.0f;
         }
@@ -352,8 +359,7 @@ extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     Wifi::startSoftAP("ESP_Metrics", "12345678");
-    server = new WebServer(metrics);
-    server->start();
+    WebServer::getInstance().start();
 
     pixel.begin(); // Init Led
     pixel.setBrightness(50); 
