@@ -65,6 +65,9 @@ volatile uint16_t dshotValueRight = 0;
 // power management
 esp_pm_lock_handle_t power_lock;
 
+Metrics metrics;
+WebServer* server;
+
 
 // === Utils ===
 int pwmToPercent(int pwm) {
@@ -137,6 +140,8 @@ void control_task(void* arg) {
     uint64_t neutralStartTime = 0;
     uint64_t lastRampTime = 0;
     uint64_t lastLoopTime = esp_timer_get_time();
+
+    static float timeSinceLastMetrics = 0.0f;
     
     while (1) {
         uint64_t now = esp_timer_get_time();
@@ -309,14 +314,25 @@ void control_task(void* arg) {
             baseVelocity, leftVelocity, rightVelocity, dshotValueLeft, dshotValueRight,
             reverseMode, readyForReverse, ramping, deltaTimeS, loopTime);
 
+        // Send telemetry data to webserver
+        timeSinceLastMetrics += deltaTimeS;
+        if (timeSinceLastMetrics >= 1.0f) {
+            MetricsData mData;
+            mData.deltaTimeS = deltaTimeS;
+            mData.loopTimeMs = loopTime;
+            metrics.update(mData);
+            server->send_metrics();
+
+            timeSinceLastMetrics = 0.0f;
+        }
+
 
         vTaskDelay(pdMS_TO_TICKS(std::max<long>((LOOP_DELAY_MS-loopTime), 1)));
     }
 }
 
 
-Metrics metrics;
-WebServer* server;
+
 
 // === Setup ===
 extern "C" void app_main(void) {
@@ -333,7 +349,6 @@ extern "C" void app_main(void) {
     Wifi::startSoftAP("ESP_Metrics", "12345678");
     server = new WebServer(metrics);
     server->start();
-
 
     pixel.begin(); // Init Led
     pixel.setBrightness(50); 
@@ -371,11 +386,11 @@ extern "C" void app_main(void) {
     dshotValueRight = DSHOT_CMD_MOTOR_STOP;
 
     // Start Dshot update loop
-    xTaskCreate(dshotTask, "dShot_task", 2048, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(dshotTask, "dShot_task", 2048, NULL, 5, NULL, 1);
 
     vTaskDelay(pdMS_TO_TICKS(5000));
 
     // Start control loop
-    xTaskCreate(control_task, "control_task", 4096, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(control_task, "control_task", 4096, NULL, 5, NULL, 1);
 
 }

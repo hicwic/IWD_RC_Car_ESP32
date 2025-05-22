@@ -159,8 +159,14 @@ esp_err_t WebServer::ws_handler(httpd_req_t *req) {
         // Étape 1 : lire l'entête du frame WebSocket (sans payload)
         esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
         if (ret != ESP_OK) {
-            ESP_LOGI(TAG, "WebSocket client disconnected or error: %d", ret);
-            break;
+            if (ret == ESP_ERR_INVALID_ARG || ret == ESP_ERR_HTTPD_INVALID_REQ) {
+                ESP_LOGI(TAG, "Client WebSocket déconnecté (err=%d)", ret);
+                break;
+            } else {
+                ESP_LOGD(TAG, "Lecture WebSocket échouée (err=%d), on réessaie", ret);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
         }
 
         if (ws_pkt.len > 0) {
@@ -178,6 +184,9 @@ esp_err_t WebServer::ws_handler(httpd_req_t *req) {
                 // Ici, tu pourrais parser `buf` si nécessaire
             }
         }
+
+        // ✅ Pause minimale dans tous les cas
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     instance_->remove_client(req);
