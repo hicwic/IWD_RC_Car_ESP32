@@ -1,7 +1,7 @@
-#include <stdio.h>
-#include <stdbool.h>
-#include <math.h>
-#include <cstring>
+//include <stdio.h>
+//#include <stdbool.h>
+//#include <math.h>
+//#include <cstring>
 
 #include "Arduino.h"
 #include "Adafruit_NeoPixel.h"
@@ -21,6 +21,7 @@
 
 // === CONFIG ===
 #define TAG "RC_ESC"
+#define DEBUG true
 #define LOG_LEVEL ESP_LOG_INFO
 
 #define NUM_CHANNELS 4
@@ -308,11 +309,14 @@ void control_task(void* arg) {
         }
 
 
+#if DEBUG
         // DEBUG
         ESP_LOGI(TAG, "Throttle:%d | Dir:%d | Mix:%d | VelReduc:%d | TargetVel:%.1f | BaseVel:%.1f | LVel:%.1f | RVel:%.1f | LDShot:%d | RDShot:%d | Rev:%d | RdyRev:%d | Ramping:%d | DelTime:%.3f | LoopTime:%.3f",
             throttlePercent, dirPercent, mixPercent, velocityReductionRate, targetVelocity,
             baseVelocity, leftVelocity, rightVelocity, dshotValueLeft, dshotValueRight,
             reverseMode, readyForReverse, ramping, deltaTimeS, loopTime);
+
+#endif
 
         // Send telemetry data to webserver
         timeSinceLastMetrics += deltaTimeS;
@@ -326,7 +330,6 @@ void control_task(void* arg) {
             timeSinceLastMetrics = 0.0f;
         }
 
-
         vTaskDelay(pdMS_TO_TICKS(std::max<long>((LOOP_DELAY_MS-loopTime), 1)));
     }
 }
@@ -338,7 +341,9 @@ void control_task(void* arg) {
 extern "C" void app_main(void) {
     initArduino();
 
+#if DEBUG
     esp_log_level_set(TAG, LOG_LEVEL);
+#endif
 
     //create power lock to prevent ESP to go in light sleep (cannot handle leds in light sleep)
     esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "no_light_sleep", &power_lock);
@@ -357,7 +362,6 @@ extern "C" void app_main(void) {
 
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    esp_log_level_set(TAG, LOG_LEVEL);
 
     // Config GPIO entrée + interruption
     for (int i = 0; i < NUM_CHANNELS; i++) {
