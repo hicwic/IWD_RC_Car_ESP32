@@ -15,6 +15,10 @@
 #include "esp_log.h"
 #include "esp_pm.h"
 
+#include "ble_server.h"
+#include "telemetry_data.h"
+#include "settings.h"
+
 // === CONFIG ===
 #define TAG "RC_ESC"
 #define DEBUG true
@@ -130,6 +134,7 @@ void control_task(void* arg) {
     int velocityReductionRate = 20;
     bool reverseMode = false;
     bool readyForReverse = false;
+    bool coasting = false;
 
     uint64_t neutralStartTime = 0;
     uint64_t lastRampTime = 0;
@@ -192,9 +197,11 @@ void control_task(void* arg) {
         }
 
         // === COASTING LOGIC ===
+        coasting = false;
         if (abs(baseVelocity) > abs(targetVelocity) && !ramping) {
             int direction = baseVelocity > 0 ? 1 : -1;
             baseVelocity = direction * std::max(abs(baseVelocity)-velocityReductionRate*deltaTimeS, abs(targetVelocity));  
+            coasting = true;
         }
 
         // === ACCELERATION LOGIC ===
@@ -302,11 +309,26 @@ void control_task(void* arg) {
 
 #if DEBUG
         // DEBUG
-        ESP_LOGI(TAG, "Throttle:%d | Dir:%d | Mix:%d | VelReduc:%d | TargetVel:%.1f | BaseVel:%.1f | LVel:%.1f | RVel:%.1f | LDShot:%d | RDShot:%d | Rev:%d | RdyRev:%d | Ramping:%d | DelTime:%.3f | LoopTime:%.3f",
-            throttlePercent, dirPercent, mixPercent, velocityReductionRate, targetVelocity,
-            baseVelocity, leftVelocity, rightVelocity, dshotValueLeft, dshotValueRight,
-            reverseMode, readyForReverse, ramping, deltaTimeS, loopTime);
+        // ESP_LOGI(TAG, "Throttle:%d | Dir:%d | Mix:%d | VelReduc:%d | TargetVel:%.1f | BaseVel:%.1f | LVel:%.1f | RVel:%.1f | LDShot:%d | RDShot:%d | Rev:%d | RdyRev:%d | Ramping:%d | DelTime:%.3f | LoopTime:%.3f",
+        //     throttlePercent, dirPercent, mixPercent, velocityReductionRate, targetVelocity,
+        //     baseVelocity, leftVelocity, rightVelocity, dshotValueLeft, dshotValueRight,
+        //     reverseMode, readyForReverse, ramping, deltaTimeS, loopTime);
 #endif
+
+        // Update telemetry
+        telemetry_data_t t;
+        t.timestamp_ms = esp_timer_get_time() / 1000;
+        t.target_speed = targetVelocity;
+        t.current_speed = baseVelocity;
+        t.left_motor = leftVelocity;
+        t.right_motor = rightVelocity;
+        t.reverse = reverseMode?1:0;
+        t.ready_for_reverse = readyForReverse?1:0;
+        t.ramping = ramping?1:0;
+        t.coasting = coasting?1:0;
+
+        TelemetryManager::instance().update(t);
+
 
         vTaskDelay(pdMS_TO_TICKS(std::max<long>((LOOP_DELAY_MS-loopTime), 1)));
     }
@@ -326,6 +348,15 @@ extern "C" void app_main(void) {
     esp_pm_lock_acquire(power_lock);
 
     vTaskDelay(pdMS_TO_TICKS(2000));
+
+    //load settings from nvs
+    SettingsManager::instance().load();
+
+    //Bluetooth Init
+    BLE::init_ble_server();
+
+    //Telemetry Init
+    TelemetryManager::instance().start();
 
     pixel.begin(); // Init Led
     pixel.setBrightness(50); 
