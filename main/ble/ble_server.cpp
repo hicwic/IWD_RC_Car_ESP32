@@ -1,5 +1,5 @@
 #include "ble_server.h"
-#include "ble_gatt_screen.h"
+#include "ble_gatt.h"
 
 #include "esp_log.h"
 #include "esp_bt.h"
@@ -59,7 +59,7 @@ static void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields = {};
 
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    const char *name = "RC_CAR_Controller";
+    const char *name = SettingsController::instance().get().rcName.c_str();
     fields.name = (uint8_t *)name;
     fields.name_len = strlen(name);
     fields.name_is_complete = 1;

@@ -4,8 +4,10 @@
 #include <string>
 #include <cstring>
 
-#include "telemetry_data.h"
-#include "settings.h"
+#include "ble_gatt.h"
+#include "drive_controller.h"
+#include "settings_controller.h"
+#include "inputs_controller.h"
 
 #define TAG "BLE_SCREEN"
 
@@ -58,7 +60,7 @@ void send_notify_to_app(const char* data) {
 }
 
 void send_notify_to_app(const uint8_t* data, size_t len) {
-    ESP_LOGI(TAG, "youpla");    
+    ESP_LOG_BUFFER_HEX("DATA", data, len);
     if (command_conn_handle != 0) {
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
         ble_gatts_notify_custom(command_conn_handle, command_attr_handle, om);
@@ -80,11 +82,11 @@ int screen_char_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             ESP_LOGI(TAG, "Écran actif: %s", currentScreen.c_str());
 
             if (currentScreen == "settings") {
-                TelemetryManager::instance().setStreaming(false);
+                DriveController::instance().stopStreamingTelemetry();
             } else if (currentScreen == "telemetry") {
-                TelemetryManager::instance().setStreaming(false);
+                DriveController::instance().stopStreamingTelemetry();
             } else {
-                TelemetryManager::instance().setStreaming(false);
+                DriveController::instance().stopStreamingTelemetry();
             }
             break;
         }
@@ -102,29 +104,47 @@ int command_char_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     command_attr_handle = attr_handle;
 
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        char cmd[50] = {};
-        memcpy(cmd, ctxt->om->om_data, std::min(ctxt->om->om_len, static_cast<uint16_t>(sizeof(cmd) - 1)));
-        ESP_LOGI(TAG, "[%s] Received: %s", currentScreen.c_str(), cmd);
+        const uint8_t* data = ctxt->om->om_data;
+        size_t len = ctxt->om->om_len;
 
         if (currentScreen == "telemetry") {
-            if (strcmp(cmd, "pausetelemetry") == 0) {
+            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_TELEMETRY_PAUSE) {
                 ESP_LOGI(TAG, "pausetelemetry");
-                TelemetryManager::instance().setStreaming(false);
-            } else if (strcmp(cmd, "resumetelemetry") == 0) {
+                DriveController::instance().stopStreamingTelemetry();
+            } else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_TELEMETRY_RESUME) {
                 ESP_LOGI(TAG, "resumetelemetry");
-                TelemetryManager::instance().setStreaming(true);
+                DriveController::instance().startStreamingTelemetry();
             }
         } else if (currentScreen == "settings") {
-            if (strcmp(cmd, "loadSettings") == 0) {
-                uint8_t out[8];
-                SettingsManager::instance().encode(out);
-                send_notify_to_app(out, 8);
+            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_LOAD) {
+                ESP_LOGI(TAG, "Received Command : loadSetting");
+                uint8_t buffer[128];
+                size_t length;
+                SettingsController::instance().encode(buffer, length);
+                send_notify_to_app(buffer, length);
             }
-            else if (reinterpret_cast<const uint8_t*>(cmd)[0] == 0x01) {
-                SettingsManager::instance().decode(reinterpret_cast<const uint8_t*>(cmd));
-                SettingsManager::instance().save();
+            else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_RESET) {
+                ESP_LOGI(TAG, "Received Command : reset Settings");                
+                SettingsController::instance().clearAllSettings();
             }
-        }
+            else if (data[0] == MSG_TYPE_DATA && data[1] == DATA_TYPE_SETTINGS) {
+                ESP_LOG_BUFFER_HEX("SETTINGS", data, len);
+                ESP_LOGI(TAG, "Received Command : save Settings");                      
+                SettingsController::instance().decode(data, len);
+                ESP_LOGI(TAG, "rcName: %s", SettingsController::instance().get().rcName.c_str());
+                SettingsController::instance().save();
+            }
+        } else if (currentScreen == "control") {
+            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_CONTROL_OVERRIDE) {
+                InputsController::instance().enableOverrideControl();
+            }
+            else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_CONTROL_RELEASE) {
+                InputsController::instance().disableOverrideControl();
+            }            
+            else if (data[0] == MSG_TYPE_DATA && data[1] == DATA_TYPE_CONTROL) {
+                InputsController::instance().setControlInputs(data, len);
+            }
+        }        
     }
 
     return 0;

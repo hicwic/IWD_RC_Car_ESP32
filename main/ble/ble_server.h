@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "settings_controller.h"
 
 namespace BLE {
 
