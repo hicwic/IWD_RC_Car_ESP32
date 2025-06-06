@@ -8,6 +8,7 @@
 #include "drive_controller.h"
 #include "settings_controller.h"
 #include "inputs_controller.h"
+#include "outputs_controller.h"
 
 #define TAG "BLE_SCREEN"
 
@@ -51,20 +52,20 @@ static const ble_uuid128_t uuid_service =
 
 
 void send_notify_to_app(const char* data) {
-    ESP_LOGI(TAG, "tagada");
+    //ESP_LOGI(TAG, "tagada");
     if (command_conn_handle != 0) {
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, strlen(data));
         ble_gatts_notify_custom(command_conn_handle, command_attr_handle, om);
-        ESP_LOGI(TAG, "Notified: %s", data);
+        //ESP_LOGI(TAG, "Notified: %s", data);
     }
 }
 
 void send_notify_to_app(const uint8_t* data, size_t len) {
-    ESP_LOG_BUFFER_HEX("DATA", data, len);
+    //ESP_LOG_BUFFER_HEX("DATA", data, len);
     if (command_conn_handle != 0) {
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
         ble_gatts_notify_custom(command_conn_handle, command_attr_handle, om);
-        ESP_LOGI(TAG, "Notified: %s", data);
+        //ESP_LOGI(TAG, "Notified: %s", data);
     }
 }
 
@@ -81,13 +82,17 @@ int screen_char_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             currentScreen = std::string(buffer);
             ESP_LOGI(TAG, "Écran actif: %s", currentScreen.c_str());
 
-            if (currentScreen == "settings") {
-                DriveController::instance().stopStreamingTelemetry();
-            } else if (currentScreen == "telemetry") {
-                DriveController::instance().stopStreamingTelemetry();
-            } else {
-                DriveController::instance().stopStreamingTelemetry();
-            }
+            DriveController::instance().stopStreamingTelemetry();
+            InputsController::instance().stopStreamingTelemetry();
+            OutputsController::instance().stopStreamingTelemetry();
+
+            // if (currentScreen == "settings") {
+            //     DriveController::instance().stopStreamingTelemetry();
+            // } else if (currentScreen == "telemetry") {
+            //     DriveController::instance().stopStreamingTelemetry();
+            // } else {
+            //     DriveController::instance().stopStreamingTelemetry();
+            // }
             break;
         }
         case BLE_GATT_ACCESS_OP_READ_CHR:
@@ -107,23 +112,28 @@ int command_char_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         const uint8_t* data = ctxt->om->om_data;
         size_t len = ctxt->om->om_len;
 
+        if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_LOAD) {
+            ESP_LOGI(TAG, "Received Command : loadSetting");
+            uint8_t buffer[128];
+            size_t length;
+            SettingsController::instance().encode(buffer, length);
+            send_notify_to_app(buffer, length);
+        }
+
         if (currentScreen == "telemetry") {
             if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_TELEMETRY_PAUSE) {
                 ESP_LOGI(TAG, "pausetelemetry");
                 DriveController::instance().stopStreamingTelemetry();
+                InputsController::instance().stopStreamingTelemetry();
+                OutputsController::instance().stopStreamingTelemetry();
             } else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_TELEMETRY_RESUME) {
                 ESP_LOGI(TAG, "resumetelemetry");
                 DriveController::instance().startStreamingTelemetry();
+                InputsController::instance().startStreamingTelemetry();
+                OutputsController::instance().startStreamingTelemetry();
             }
-        } else if (currentScreen == "settings") {
-            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_LOAD) {
-                ESP_LOGI(TAG, "Received Command : loadSetting");
-                uint8_t buffer[128];
-                size_t length;
-                SettingsController::instance().encode(buffer, length);
-                send_notify_to_app(buffer, length);
-            }
-            else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_RESET) {
+        } else if (currentScreen == "settings") {            
+            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_SETTINGS_RESET) {
                 ESP_LOGI(TAG, "Received Command : reset Settings");                
                 SettingsController::instance().clearAllSettings();
             }
@@ -133,16 +143,35 @@ int command_char_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                 SettingsController::instance().decode(data, len);
                 ESP_LOGI(TAG, "rcName: %s", SettingsController::instance().get().rcName.c_str());
                 SettingsController::instance().save();
+                //OutputsController::instance().restart();
             }
         } else if (currentScreen == "control") {
-            if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_CONTROL_OVERRIDE) {
-                InputsController::instance().enableOverrideControl();
-            }
-            else if (data[0] == MSG_TYPE_COMMAND && data[1] == CMD_CONTROL_RELEASE) {
-                InputsController::instance().disableOverrideControl();
-            }            
-            else if (data[0] == MSG_TYPE_DATA && data[1] == DATA_TYPE_CONTROL) {
-                InputsController::instance().setControlInputs(data, len);
+            switch(data[1]) {
+                case CMD_CONTROL_OVERRIDE:
+                    InputsController::instance().enableOverrideControl();
+                    break;
+                case CMD_CONTROL_RELEASE:
+                    InputsController::instance().disableOverrideControl();
+                    break;
+                case CMD_TELEMETRY_SEND_INPUTS:
+                    InputsController::instance().startStreamingTelemetry();
+                    DriveController::instance().stopStreamingTelemetry();
+                    OutputsController::instance().stopStreamingTelemetry();
+                    break;
+                case CMD_TELEMETRY_SEND_OUTPUTS:
+                    OutputsController::instance().startStreamingTelemetry();
+                    DriveController::instance().stopStreamingTelemetry();
+                    InputsController::instance().stopStreamingTelemetry();
+                    break;                
+                case CMD_TELEMETRY_SEND_MOTION:
+                    DriveController::instance().startStreamingTelemetry();
+                    InputsController::instance().stopStreamingTelemetry();
+                    OutputsController::instance().stopStreamingTelemetry();
+                    break;      
+                case DATA_TYPE_CONTROL:
+                     ESP_LOGI(TAG, "Received Data control");
+                    InputsController::instance().setControlInputs(data, len);
+                    break;      
             }
         }        
     }

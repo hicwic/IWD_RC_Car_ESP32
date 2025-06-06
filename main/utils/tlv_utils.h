@@ -41,6 +41,10 @@ public:
         i += size;
     }
 
+    void addUint16(uint8_t id, uint16_t value) {
+        add(id, &value, 2);
+    }
+
     void addInt32(uint8_t id, int32_t value) {
         add(id, &value, 4);
     }
@@ -52,6 +56,10 @@ public:
     void addDouble(uint8_t id, double value) {
         add(id, &value, 8);
     }
+
+    void addFloat(uint8_t id, float value) {
+        add(id, &value, sizeof(float));
+    }    
 
     size_t length() const { return i; }
 

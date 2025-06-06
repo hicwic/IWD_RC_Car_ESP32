@@ -18,6 +18,7 @@
 #include "drive_controller.h"
 #include "settings_controller.h"
 #include "inputs_controller.h"
+#include "outputs_controller.h"
 
 
 // === CONFIG ===
@@ -59,9 +60,11 @@ extern "C" void app_main(void) {
     //Inputs Controller Start
     InputsController::instance().start();
 
+    //Ouputs Controller Start
+    OutputsController::instance().start();
+
     //Drive Controller Start
     DriveController::instance().start();
-
 
     // pixel.begin(); // Init Led
     // pixel.setBrightness(50); 

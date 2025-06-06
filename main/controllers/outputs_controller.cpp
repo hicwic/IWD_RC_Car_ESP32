@@ -5,28 +5,28 @@ OutputsController& OutputsController::instance() {
     return inst;
 }
 
-int OutputsController::velocityToDShotCommand(int velocity) {
+int OutputsController::normalizedToDShotCommand(float normalized) {
     // Mode 3D : 0 = stop, 48..1047 = reverse, 1049..2047 = forward
-    if (velocity == 0) return 0;
+    if (normalized == 0) return 0;
 
-    if (velocity > 0) {
-        int scaled = 1049 + (velocity * (2047 - 1049)) / 100;
+    if (normalized > 0) {
+        int scaled = roundf(1049 + (normalized * (2047 - 1049)) / 100.0f);
         if (scaled > 2047) scaled = 2047;
         return scaled;
     } else {
-        int scaled = 48 + (abs(velocity) * (1047 - 48)) / 100;
+        int scaled = roundf(48 + (abs(normalized) * (1047 - 48)) / 100.0f);
         if (scaled > 1047) scaled = 1047;
         return scaled;
     }
 }
 
-int OutputsController::velocityToPwmUs(int velocity) {
+int OutputsController::normalizedToPwmUs(float normalized) {
     // PWM standard : 1000 µs (full reverse) → 1500 µs (stop) → 2000 µs (full forward)
 
-    if (velocity > 100) velocity = 100;
-    if (velocity < -100) velocity = -100;
+    if (normalized > 100) normalized = 100;
+    if (normalized < -100) normalized = -100;
 
-    return 1500 + (velocity * 500) / 100;
+    return roundf(1500 + (normalized * 500.0f) / 100.0f);
 }
 
 
@@ -38,27 +38,29 @@ void OutputsController::initMotor(uint8_t mode, ledc_channel_t channel, gpio_num
             break;
 
         case MOTOR_MODE_DSHOT:
+        ESP_LOGI("ESC_INIT", "Init motor mode=%d on gpio=%d", mode, gpio);
             esc = new DShotRMT(gpio);
             esc->begin(DSHOT300, NO_BIDIRECTION, 12);
             break;
 
         case MOTOR_MODE_BDSHOT:
+        ESP_LOGI("ESC_INIT", "Init motor mode=%d on gpio=%d", mode, gpio);
             esc = new DShotRMT(gpio);
             esc->begin(DSHOT300, ENABLE_BIDIRECTION, 12);
             break;
     }
 }
 
-void OutputsController::setMotorOutput(const MotorConfig& cfg, int velocity) {
+void OutputsController::setMotorOutput(const MotorConfig& cfg, float normalized) {
     switch (cfg.mode) {
         case MOTOR_MODE_PWM:
-            setPWMDutyUs(cfg.pwmChannel, velocityToPwmUs(velocity));
+            setPWMDutyUs(cfg.pwmChannel, normalizedToPwmUs(normalized));
             break;
 
         case MOTOR_MODE_DSHOT:
         case MOTOR_MODE_BDSHOT:
             if (cfg.dshot) {
-                cfg.dshot->send_dshot_value(velocityToDShotCommand(velocity));
+                cfg.dshot->send_dshot_value(normalizedToDShotCommand(normalized));
             }
             break;
     }
@@ -99,11 +101,40 @@ void OutputsController::updateTaskLoop() {
 }
 
 
+// void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) {
+//     static bool timerInitialized = false;
+
+//     if (!timerInitialized) {
+//         ledc_timer_config_t timer_conf;
+//         timer_conf.speed_mode       = LEDC_LOW_SPEED_MODE;
+//         timer_conf.timer_num        = LEDC_TIMER_0;
+//         timer_conf.duty_resolution  = LEDC_TIMER_13_BIT;
+//         timer_conf.freq_hz          = 50;
+//         timer_conf.clk_cfg          = LEDC_AUTO_CLK;
+// #if ESP_IDF_VERSION_MAJOR >= 5
+//         timer_conf.deconfigure      = false;
+// #endif
+//         ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
+//         timerInitialized = true;
+//     }
+
+//     ledc_channel_config_t channel_conf;
+//     channel_conf.speed_mode = LEDC_LOW_SPEED_MODE;
+//     channel_conf.channel    = channel;
+//     channel_conf.timer_sel  = LEDC_TIMER_0;
+//     channel_conf.intr_type  = LEDC_INTR_DISABLE;
+//     channel_conf.gpio_num   = gpio;
+//     channel_conf.duty       = 0;
+//     channel_conf.hpoint     = 0;
+
+//     ESP_ERROR_CHECK(ledc_channel_config(&channel_conf));
+// }
+
 void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) {
     static bool timerInitialized = false;
 
     if (!timerInitialized) {
-        ledc_timer_config_t timer_conf;
+        ledc_timer_config_t timer_conf = {};
         timer_conf.speed_mode       = LEDC_LOW_SPEED_MODE;
         timer_conf.timer_num        = LEDC_TIMER_0;
         timer_conf.duty_resolution  = LEDC_TIMER_13_BIT;
@@ -116,7 +147,7 @@ void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) 
         timerInitialized = true;
     }
 
-    ledc_channel_config_t channel_conf;
+    ledc_channel_config_t channel_conf = {};
     channel_conf.speed_mode = LEDC_LOW_SPEED_MODE;
     channel_conf.channel    = channel;
     channel_conf.timer_sel  = LEDC_TIMER_0;
@@ -124,6 +155,10 @@ void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) 
     channel_conf.gpio_num   = gpio;
     channel_conf.duty       = 0;
     channel_conf.hpoint     = 0;
+
+#if ESP_IDF_VERSION_MAJOR >= 5
+    channel_conf.flags.output_invert = 0;  // ce champ est requis !
+#endif
 
     ESP_ERROR_CHECK(ledc_channel_config(&channel_conf));
 }
@@ -173,4 +208,91 @@ void OutputsController::start() {
     //delay to arm ESCs
     vTaskDelay(pdMS_TO_TICKS(5000));
 
+
+    xTaskCreatePinnedToCore(telemetryTaskEntry, "outputs_telemetry_task", 4096, nullptr, 1, &telemetryTaskHandle, 1);
+}
+
+void OutputsController::startStreamingTelemetry() {
+    streamingTelemetry = true;
+}
+
+void OutputsController::stopStreamingTelemetry() {
+    streamingTelemetry = false;
+}
+
+void OutputsController::telemetryTaskEntry(void* param) {
+    OutputsController::instance().telemetryTaskLoop();
+}
+
+void OutputsController::telemetryTaskLoop() {
+
+    while (true) {
+        if (streamingTelemetry) {
+            uint8_t buffer[32];
+            TLVWriter writer(buffer);
+            writer.begin(MSG_TYPE_DATA, DATA_TYPE_TELEMETRY_OUTPUTS);
+
+            auto writeOutput = [&](uint8_t id, float value, int mode) {
+                int16_t encoded = (mode == MOTOR_MODE_PWM)
+                    ? normalizedToPwmUs(value)
+                    : normalizedToDShotCommand(value);
+                writer.addUint16(id, encoded);
+            };
+
+            Settings settings = SettingsController::instance().get();
+
+            if (settings.driveMode == DRIVE_MODE_XCWD) {
+                writeOutput(0x05, valueCentral, settings.centralDriveTrainType);
+            } else {
+                if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) {
+                    writeOutput(0x03, valueFrontLeft, settings.frontDriveTrainType);
+                    writeOutput(0x04, valueFrontRight, settings.frontDriveTrainType);
+                }
+                if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) {
+                    writeOutput(0x01, valueRearLeft, settings.rearDriveTrainType);
+                    writeOutput(0x02, valueRearRight, settings.rearDriveTrainType);
+                }
+            }
+
+            BLE::send_notify_to_app(buffer, writer.length());
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void OutputsController::stop() {
+    if (updateTaskHandle) {
+        vTaskDelete(updateTaskHandle);
+        updateTaskHandle = nullptr;
+    }
+
+    if (telemetryTaskHandle) {
+        vTaskDelete(telemetryTaskHandle);
+        telemetryTaskHandle = nullptr;
+    }
+
+    // Reset PWM outputs to neutral
+    for (int ch = 0; ch < LEDC_CHANNEL_MAX; ++ch) {
+        ledc_stop(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch), 1); // signal à 0
+    }
+
+    // Delete DShot objects if they exist
+    auto deleteIfExists = [](DShotRMT*& esc) {
+        if (esc) {
+            delete esc;
+            esc = nullptr;
+        }
+    };
+
+    deleteIfExists(centralESC);
+    deleteIfExists(leftFrontESC);
+    deleteIfExists(rightFrontESC);
+    deleteIfExists(leftRearESC);
+    deleteIfExists(rightRearESC);
+}
+
+void OutputsController::restart() {
+    stop();
+    start();
 }

@@ -144,6 +144,7 @@ void DShotRMT::begin(dshot_mode_t dshot_mode, bidirectional_mode_t is_bidirectio
 	this->begin(dshot_config.gpio_num, dshot_mode, is_bidirectional, magnet_count);
 }
 
+
 /// Apply the settings to the RMT backend
 void DShotRMT::begin(uint8_t pin, dshot_mode_t dshot_mode, bidirectional_mode_t is_bidirectional, uint16_t magnet_count)
 {
@@ -227,7 +228,7 @@ void DShotRMT::begin(uint8_t pin, dshot_mode_t dshot_mode, bidirectional_mode_t 
         .gpio_num = dshot_config.gpio_num,
         .clk_src = RMT_CLK_SRC_DEFAULT, // select a clock that can provide needed resolution (apb)
         .resolution_hz = RMT_CYCLES_PER_SEC, // esc resolution in Hz
-        .mem_block_symbols = 64, // default count per channel
+        .mem_block_symbols = 48, // default count per channel
         .trans_queue_depth = 10 // set the number of transactions that can be pending in the background
     };
 
@@ -247,7 +248,7 @@ void DShotRMT::begin(uint8_t pin, dshot_mode_t dshot_mode, bidirectional_mode_t 
 			.gpio_num = dshot_config.gpio_num,
 			.clk_src = RMT_CLK_SRC_DEFAULT, // select a clock that can provide needed resolution (apb)
 			.resolution_hz = RMT_CYCLES_PER_SEC, // esc resolution in Hz
-			.mem_block_symbols = 64, // default count per channel
+			.mem_block_symbols = 48, // default count per channel
 			.flags =
 				{
 				.invert_in = 1, //invert the input logic

@@ -13,9 +13,11 @@
 #include "DShotRMT.h"
 
 #include "settings_controller.h"
+#include "ble_gatt.h"
+#include "tlv_utils.h"
 
 
-#define ESC_CENTRAL_GPIO GPIO_NUM_13
+#define ESC_CENTRAL_GPIO GPIO_NUM_8
 
 #define ESC_REAR_RIGHT_GPIO GPIO_NUM_13
 #define ESC_REAR_LEFT_GPIO GPIO_NUM_12
@@ -40,15 +42,22 @@ class OutputsController {
 public:
     static OutputsController& instance();
 
-    volatile int16_t valueCentral = 0;
-    volatile int16_t valueRearLeft = 0;
-    volatile int16_t valueRearRight = 0;
-    volatile int16_t valueFrontLeft = 0;
-    volatile int16_t valueFrontRight = 0;
+    volatile float valueCentral = 0;
+    volatile float valueRearLeft = 0;
+    volatile float valueRearRight = 0;
+    volatile float valueFrontLeft = 0;
+    volatile float valueFrontRight = 0;
 
     volatile int16_t valueServoRaw = 0;
 
     void start();
+    void restart();
+    void stop();
+
+
+    void startStreamingTelemetry();
+    void stopStreamingTelemetry();
+
 
 private:
     OutputsController() = default;
@@ -59,16 +68,21 @@ private:
     DShotRMT* leftRearESC = nullptr;
     DShotRMT* rightRearESC = nullptr;
 
-    int velocityToDShotCommand(int velocity);
-    int velocityToPwmUs(int velocity);
+    int normalizedToDShotCommand(float normalized);
+    int normalizedToPwmUs(float normalized);
 
     void initMotor(uint8_t mode, ledc_channel_t channel, gpio_num_t gpio, DShotRMT*& esc);
-    void setMotorOutput(const MotorConfig& cfg, int velocity);
+    void setMotorOutput(const MotorConfig& cfg, float normalized);
     void pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio);
     void setPWMDutyUs(ledc_channel_t channel, int us);
 
     void updateTaskLoop();
     TaskHandle_t updateTaskHandle = nullptr;
+
+    void telemetryTaskLoop();
+    static void telemetryTaskEntry(void*);
+    TaskHandle_t telemetryTaskHandle = nullptr;
+    bool streamingTelemetry = false;
 
 };
 

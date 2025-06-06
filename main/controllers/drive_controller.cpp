@@ -72,12 +72,25 @@ void DriveController::telemetryTaskLoop() {
 
             uint8_t buffer[64];
             TLVWriter writer(buffer);
-            writer.begin(MSG_TYPE_DATA, DATA_TYPE_TELEMETRY);
+            writer.begin(MSG_TYPE_DATA, DATA_TYPE_TELEMETRY_MOTION);
 
-            writer.addDouble(0x01, snapshot.target_speed);      // ts
-            writer.addDouble(0x02, snapshot.current_speed);     // cs
-            writer.addDouble(0x03, snapshot.rear_left_motor);   // rl
-            writer.addDouble(0x04, snapshot.rear_right_motor);  // rr
+            writer.addFloat(0x01, snapshot.target_speed);      // ts
+            writer.addFloat(0x02, snapshot.current_speed);     // cs
+
+            const auto& settings = SettingsController::instance().get();
+            if (settings.driveMode == DRIVE_MODE_XCWD) {
+                writer.addFloat(0x0B, snapshot.central_motor);  // fr   
+            } else {
+                if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) {
+                    writer.addFloat(0x09, snapshot.front_left_motor);   // fl
+                    writer.addFloat(0x0A, snapshot.front_right_motor);  // fr
+                }
+
+                if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) {
+                    writer.addFloat(0x03, snapshot.rear_left_motor);   // rl
+                    writer.addFloat(0x04, snapshot.rear_right_motor);  // rr                    
+                }
+            }
 
             writer.addBool(0x05, snapshot.reverse);             // rev
             writer.addBool(0x06, snapshot.ready_for_reverse);   // revOK
@@ -87,7 +100,7 @@ void DriveController::telemetryTaskLoop() {
             BLE::send_notify_to_app(buffer, writer.length());
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 

@@ -17,13 +17,29 @@ void InputsController::disableOverrideControl() {
 
 
 void InputsController::setControlInputs(const uint8_t* in, size_t len) {
-    if (len < 4) return;
-    if (in[0] != MSG_TYPE_DATA || in[1] != DATA_TYPE_CONTROL) return;
+    TLVReader reader(in, len);
+    if (!reader.checkHeader(MSG_TYPE_DATA, DATA_TYPE_CONTROL)) return;
 
-    overridedChan1     = in[2];
-    overridedChan2     = in[3];
+    uint8_t id, size;
+    const uint8_t* data;
+
+    while (reader.next(id, size, data)) {
+        if (size < 2) continue;
+
+        uint16_t value = data[0] | (data[1] << 8);
+
+        switch (id) {
+            case 0x01:
+                overridedChan1 = value;
+                break;
+            case 0x02:
+                overridedChan2 = value;
+                break;
+            default:
+                break;
+        }
+    }
 }
-
 
 int8_t InputsController::pwmToPercent(int16_t pwm) {
     if (pwm < PWM_MIN) pwm = PWM_MIN;
@@ -39,18 +55,18 @@ int16_t InputsController::percentToPwm(int8_t percent) {
 
 int8_t InputsController::getValueForChan(uint8_t ch) {
     if (overrideControl && ch == 1)
-        return overridedChan1;
+        return pwmToPercent(overridedChan1);
     if (overrideControl && ch == 2)
-        return overridedChan2;
+        return pwmToPercent(overridedChan2);
 
     return pwmToPercent(pulseWidth[ch-1]);
 }
 
-int8_t InputsController::getRawValueForChan(uint8_t ch) {
+int16_t InputsController::getRawValueForChan(uint8_t ch) {
     if (overrideControl && ch == 1)
-        return percentToPwm(overridedChan1);
+        return overridedChan1;
     if (overrideControl && ch == 2)
-        return percentToPwm(overridedChan2);
+        return overridedChan2;
 
     return pulseWidth[ch-1];
 }
@@ -92,5 +108,37 @@ void InputsController::start() {
     gpio_install_isr_service(0);
     for (int i = 0; i < NUM_CHANNELS; i++) {
         gpio_isr_handler_add(chPins[i], gpio_isr_handler, (void*)i);
+    }
+
+    xTaskCreatePinnedToCore(telemetryTaskEntry, "inputs_telemetry_task", 4096, nullptr, 1, &telemetryTaskHandle, 1);
+}
+
+void InputsController::startStreamingTelemetry() {
+    streamingTelemetry = true;
+}
+
+void InputsController::stopStreamingTelemetry() {
+    streamingTelemetry = false;
+}
+
+void InputsController::telemetryTaskEntry(void* param) {
+    InputsController::instance().telemetryTaskLoop();
+}
+
+void InputsController::telemetryTaskLoop() {
+    while (true) {
+        if (streamingTelemetry) {
+            uint8_t buffer[32];
+            TLVWriter writer(buffer);
+            writer.begin(MSG_TYPE_DATA, DATA_TYPE_TELEMETRY_INPUTS);
+
+            for (int i = 0; i < NUM_CHANNELS; ++i) {
+                writer.addUint16(0x10 + i, getRawValueForChan(i+1));
+            }
+
+            BLE::send_notify_to_app(buffer, writer.length());
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
