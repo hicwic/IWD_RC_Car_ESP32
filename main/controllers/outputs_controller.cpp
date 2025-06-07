@@ -67,9 +67,10 @@ void OutputsController::setMotorOutput(const MotorConfig& cfg, float normalized)
 }
 
 void OutputsController::updateTaskLoop() {
-    const auto& settings = SettingsController::instance().get();
-
     while (true) {
+        const auto& settings = SettingsController::instance().get();
+
+        // Update motors
         if (settings.driveMode == DRIVE_MODE_XCWD) {
             MotorConfig centralMotor {
                 .mode = settings.centralDriveTrainType,
@@ -95,6 +96,9 @@ void OutputsController::updateTaskLoop() {
                 setMotorOutput(rearRightCfg, valueRearRight);
             }
         }
+
+        // Update Servo from input
+        setPWMDutyUs(LEDC_CHANNEL_4, InputsController::instance().getRawValueForChan(1) + settings.steeringTrim * 5);
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -176,6 +180,9 @@ void OutputsController::setPWMDutyUs(ledc_channel_t channel, int us) {
 
 void OutputsController::start() {
 
+    // Init Servo output (pwm)
+    pwmInitChannel(LEDC_CHANNEL_4, SERVO_GPIO);
+
     // Init with 0 value to arm ESCs
     valueCentral = 0;
     valueRearLeft = 0;
@@ -228,7 +235,7 @@ void OutputsController::telemetryTaskLoop() {
 
     while (true) {
         if (streamingTelemetry) {
-            uint8_t buffer[32];
+            uint8_t buffer[64];
             TLVWriter writer(buffer);
             writer.begin(MSG_TYPE_DATA, DATA_TYPE_TELEMETRY_OUTPUTS);
 
@@ -241,6 +248,7 @@ void OutputsController::telemetryTaskLoop() {
 
             Settings settings = SettingsController::instance().get();
 
+            // Write motor output
             if (settings.driveMode == DRIVE_MODE_XCWD) {
                 writeOutput(0x05, valueCentral, settings.centralDriveTrainType);
             } else {
@@ -253,6 +261,9 @@ void OutputsController::telemetryTaskLoop() {
                     writeOutput(0x02, valueRearRight, settings.rearDriveTrainType);
                 }
             }
+
+            //Write servo output
+            writer.addUint16(0x06, InputsController::instance().getRawValueForChan(1) + settings.steeringTrim * 5);
 
             BLE::send_notify_to_app(buffer, writer.length());
         }

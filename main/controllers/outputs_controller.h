@@ -12,12 +12,13 @@
 
 #include "DShotRMT.h"
 
+#include "inputs_controller.h"
 #include "settings_controller.h"
 #include "ble_gatt.h"
 #include "tlv_utils.h"
 
 
-#define ESC_CENTRAL_GPIO GPIO_NUM_8
+#define ESC_CENTRAL_GPIO GPIO_NUM_13
 
 #define ESC_REAR_RIGHT_GPIO GPIO_NUM_13
 #define ESC_REAR_LEFT_GPIO GPIO_NUM_12
@@ -25,7 +26,7 @@
 #define ESC_FRONT_RIGHT_GPIO GPIO_NUM_11
 #define ESC_FRONT_LEFT_GPIO GPIO_NUM_10
 
-#define SERVO_GPIO GPIO_NUM_9
+#define SERVO_GPIO GPIO_NUM_7
 
 
 constexpr uint32_t PWM_RESOLUTION_BITS = 13;
@@ -47,8 +48,6 @@ public:
     volatile float valueRearRight = 0;
     volatile float valueFrontLeft = 0;
     volatile float valueFrontRight = 0;
-
-    volatile int16_t valueServoRaw = 0;
 
     void start();
     void restart();

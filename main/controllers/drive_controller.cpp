@@ -20,8 +20,6 @@
 #define TAG "DRIVECONTROLLER"
 
 
-#define DEADZONE 10
-#define MAX_MIX 50
 #define MIN_THROTTLE_FWD 10
 #define NEUTRAL_DELAY_MS 500
 #define INVERT_STEERING_LOGIC false //used to invert differential steering logic (used if steering channel need to be reversed on radio)
@@ -105,17 +103,11 @@ void DriveController::telemetryTaskLoop() {
 }
 
 void DriveController::controllerTaskLoop() {
-//     float baseVelocity = 0;
-//     float targetVelocity = 0;
-    float rampTargetVelocity = 0;
+    float rampTargetSpeed = 0;
     float rampStep = 0;
     int rampStepCount = 0;
     bool ramping = false;
 
-//     int velocityReductionRate = 20;
-//     bool reverseMode = false;
-//     bool readyForReverse = false;
-//     bool coasting = false;
 
     uint64_t neutralStartTime = 0;
     uint64_t lastRampTime = 0;
@@ -130,18 +122,20 @@ void DriveController::controllerTaskLoop() {
         int dirPercent = InputsController::instance().getValueForChan(1);
         int throttlePercent = InputsController::instance().getValueForChan(2);;
 
+        Settings settings = SettingsController::instance().get();
+
         const int mixSign = INVERT_STEERING_LOGIC ? -1 : 1;
 
         // === THROTTLE LOGIC ===
         //Moving foward, we set target velocity to throttle. Reverse is reinit
-        if (throttlePercent > DEADZONE) {
+        if (throttlePercent > settings.throttleDeadzone) {
             data.reverse = false;
             data.ready_for_reverse = false;
             neutralStartTime = 0;
             data.target_speed = throttlePercent;
         } 
         //Deadzone, targetVelocity is 0. We start the neutral timer (time before we can reverse)
-        else if (throttlePercent >= -DEADZONE && throttlePercent <= DEADZONE) {
+        else if (throttlePercent >= -settings.throttleDeadzone && throttlePercent <= settings.throttleDeadzone) {
             data.reverse = false;
             data.ramping = false;
             data.target_speed = 0;
@@ -173,19 +167,24 @@ void DriveController::controllerTaskLoop() {
         // === COASTING LOGIC ===
         data.coasting = false;
         if (abs(data.current_speed) > abs(data.target_speed) && !ramping) {
-            int direction = data.current_speed > 0 ? 1 : -1;
-            data.current_speed = direction * std::max(abs(data.current_speed)-SettingsController::instance().get().coastingFactor*deltaTimeS, abs(data.target_speed));  
-            data.coasting = true;
+            if (settings.enableCoasting) {
+                int direction = data.current_speed > 0 ? 1 : -1;
+                data.current_speed = direction * std::max(abs(data.current_speed)-SettingsController::instance().get().coastingFactor*deltaTimeS, abs(data.target_speed));  
+                data.coasting = true;
+            }
+            else {
+                data.current_speed = data.target_speed;
+            }
         }
 
         // === ACCELERATION LOGIC ===
         if (fabs(data.target_speed) > 0 && !ramping) {
             //if the base velocity is 0 and we accelerate start ramping
-            if (data.current_speed == 0) {
+            if (data.current_speed == 0 && settings.enableRamping) {
                 ramping = true;
-                rampTargetVelocity = data.target_speed;
+                rampTargetSpeed = data.target_speed;
                 rampStepCount = 0;
-                rampStep = rampTargetVelocity / RAMP_STEPS;
+                rampStep = rampTargetSpeed / RAMP_STEPS;
                 data.current_speed = 0;
                 lastRampTime = now;
             } 
@@ -198,14 +197,14 @@ void DriveController::controllerTaskLoop() {
         // === RAMPING LOGIC ===
         if (ramping) {
             //cancel ramping if deccelerate
-            if (fabs(data.target_speed) < fabs(rampTargetVelocity)) {
+            if (fabs(data.target_speed) < fabs(rampTargetSpeed)) {
                 ramping = false;
             } else if (now - lastRampTime >= RAMP_INTERVAL_MS) {
-                //if data.target_speed is higher and ramping, then we recalculate steps and update rampTargetVelocity (occur while multiple read while pulling throttle trigger)
-                if (fabs(data.target_speed) > fabs(rampTargetVelocity)) {
+                //if data.target_speed is higher and ramping, then we recalculate steps and update rampTargetSpeed (occur while multiple read while pulling throttle trigger)
+                if (fabs(data.target_speed) > fabs(rampTargetSpeed)) {
                     int direction = data.target_speed > 0 ? 1 : -1;
                     rampStep = direction * (fabs(data.target_speed) - fabs(data.current_speed)) / (RAMP_STEPS - rampStepCount);
-                    rampTargetVelocity = data.target_speed;
+                    rampTargetSpeed = data.target_speed;
                 }
 
                 data.current_speed += rampStep;
@@ -214,71 +213,45 @@ void DriveController::controllerTaskLoop() {
 
                 //once reached the num au ramping steps we conclude ramping
                 if (rampStepCount >= RAMP_STEPS) {
-                    data.current_speed = rampTargetVelocity;
+                    data.current_speed = rampTargetSpeed;
                     ramping = false;
                 }
             }
         }
 
         // === DIFFERENTIAL ===
-        float leftVelocity = data.current_speed;
-        float rightVelocity = data.current_speed;
+        float leftSpeed = data.current_speed;
+        float rightSpeed = data.current_speed;
 
         if (!ramping) {
             float diff = dirPercent * SettingsController::instance().get().rearDiffFactor / 100.0;
-            leftVelocity  = data.current_speed - mixSign * diff;
-            rightVelocity = data.current_speed + mixSign * diff;
+            leftSpeed  = data.current_speed - mixSign * diff;
+            rightSpeed = data.current_speed + mixSign * diff;
         }
 
         // Min. throttle fwd/rev
         if (data.current_speed > 0) {
-            leftVelocity  = fmax(leftVelocity,  MIN_THROTTLE_FWD);
-            rightVelocity = fmax(rightVelocity, MIN_THROTTLE_FWD);
+            leftSpeed  = fmax(leftSpeed,  MIN_THROTTLE_FWD);
+            rightSpeed = fmax(rightSpeed, MIN_THROTTLE_FWD);
         } else if (data.current_speed < 0) {
-            leftVelocity  = fmin(leftVelocity,  -MIN_THROTTLE_FWD);
-            rightVelocity = fmin(rightVelocity, -MIN_THROTTLE_FWD);
+            leftSpeed  = fmin(leftSpeed,  -MIN_THROTTLE_FWD);
+            rightSpeed = fmin(rightSpeed, -MIN_THROTTLE_FWD);
         } else {
-            leftVelocity = 0;
-            rightVelocity = 0;
+            leftSpeed = 0;
+            rightSpeed = 0;
         }
 
+        data.rear_left_motor = leftSpeed;
+        data.rear_right_motor = rightSpeed;
+
         // // DShot
-        OutputsController::instance().valueRearLeft = leftVelocity;
-        OutputsController::instance().valueRearRight = rightVelocity;
+        OutputsController::instance().valueRearLeft = leftSpeed;
+        OutputsController::instance().valueRearRight = rightSpeed;
 
 
         float loopTime = (esp_timer_get_time() - now) / 1000.0;
 
 
-        // // === LED BLINKING FEEDBACK ===
-        // if (baseVelocity != 0.0) {
-        //     int direction = baseVelocity > 0 ? 1 : -1;
-        //     float frequencyHz = abs(baseVelocity) / 10.0; // between 0 et 10 Hz
-        //     frequencyHz = constrain(frequencyHz, 0.5, 10.0); // avoid 0 Hz (divide by 0)
-        //     float period = 1000.0 / frequencyHz; // convert to ms
-        //     float halfPeriod = period / 2.0;
-
-        //     if (millis() - lastBlinkTime >= halfPeriod) {
-        //         ledState = !ledState;
-        //         lastBlinkTime = millis();
-        //     }
-
-        //     if (ledState) {
-        //         if (direction > 0) {
-        //             pixel.setPixelColor(0, pixel.Color(0, 255, 0)); // move forward = blinking green
-        //         } else {
-        //             pixel.setPixelColor(0, pixel.Color(255, 255, 255)); // move backward = blinking white
-        //         }
-        //     } else {
-        //         pixel.setPixelColor(0, pixel.Color(0, 0, 0)); // LED off
-        //     }
-        //     pixel.show();
-
-        // } else {
-        //     ledState = false;
-        //     pixel.setPixelColor(0, pixel.Color(255, 0, 0)); // stopped = fix red
-        //     pixel.show();
-        // }
 
 
 // #if DEBUG
@@ -288,20 +261,6 @@ void DriveController::controllerTaskLoop() {
         //     data.current_speed, leftVelocity, rightVelocity, OutputsController::instance().dshotValueLeft, OutputsController::instance().dshotValueRight,
         //     data.reverse, data.ready_for_reverse, data.ramping, deltaTimeS, loopTime);
 // #endif
-
-        // // Update telemetry
-        // telemetry_data_t t;
-        // t.timestamp_ms = esp_timer_get_time() / 1000;
-        // t.target_speed = targetVelocity;
-        // t.current_speed = baseVelocity;
-        // t.left_motor = leftVelocity;
-        // t.right_motor = rightVelocity;
-        // t.reverse = reverseMode?1:0;
-        // t.ready_for_reverse = readyForReverse?1:0;
-        // t.ramping = ramping?1:0;
-        // t.coasting = coasting?1:0;
-
-        // TelemetryManager::instance().update(t);
 
 
         vTaskDelay(pdMS_TO_TICKS(std::max<long>((LOOP_DELAY_MS-loopTime), 1)));
