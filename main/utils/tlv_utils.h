@@ -45,6 +45,10 @@ public:
         add(id, &value, 2);
     }
 
+    void addUInt32(uint8_t id, uint32_t value) {
+        add(id, &value, 4);
+    }
+
     void addInt32(uint8_t id, int32_t value) {
         add(id, &value, 4);
     }

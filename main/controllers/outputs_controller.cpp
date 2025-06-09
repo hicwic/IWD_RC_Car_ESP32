@@ -40,99 +40,99 @@ void OutputsController::initMotor(uint8_t mode, ledc_channel_t channel, gpio_num
         case MOTOR_MODE_DSHOT:
         ESP_LOGI("ESC_INIT", "Init motor mode=%d on gpio=%d", mode, gpio);
             esc = new DShotRMT(gpio);
-            esc->begin(DSHOT300, NO_BIDIRECTION, 12);
+            esc->begin(DSHOT300, NO_BIDIRECTION, 14);
             break;
 
         case MOTOR_MODE_BDSHOT:
         ESP_LOGI("ESC_INIT", "Init motor mode=%d on gpio=%d", mode, gpio);
             esc = new DShotRMT(gpio);
-            esc->begin(DSHOT300, ENABLE_BIDIRECTION, 12);
+            esc->begin(DSHOT300, ENABLE_BIDIRECTION, 14);
             break;
     }
 }
 
-void OutputsController::setMotorOutput(const MotorConfig& cfg, float normalized) {
-    switch (cfg.mode) {
-        case MOTOR_MODE_PWM:
-            setPWMDutyUs(cfg.pwmChannel, normalizedToPwmUs(normalized));
-            break;
+void OutputsController::setMotorDShotOutput(MotorIndex index, DShotRMT* esc, float normalized, uint8_t mode) {
+    static uint32_t lastSendMicros[MOTOR_COUNT] = {0};
 
-        case MOTOR_MODE_DSHOT:
-        case MOTOR_MODE_BDSHOT:
-            if (cfg.dshot) {
-                cfg.dshot->send_dshot_value(normalizedToDShotCommand(normalized));
-            }
-            break;
+    if (!esc) return;
+
+    uint32_t now = micros();
+
+    if (mode == MOTOR_MODE_BDSHOT) {
+        uint32_t rpm = 0;
+        auto result = esc->get_dshot_packet(&rpm);
+
+        if (result == DECODE_SUCCESS) {
+            currentRPM[index] = rpm;
+        }
+    }
+
+    if (now - lastSendMicros[index] > 300) {
+        esc->send_dshot_value(normalizedToDShotCommand(normalized));
+        lastSendMicros[index] = now;
     }
 }
 
-void OutputsController::updateTaskLoop() {
+void OutputsController::dshotTaskLoop() {
     while (true) {
         const auto& settings = SettingsController::instance().get();
 
-        // Update motors
-        if (settings.driveMode == DRIVE_MODE_XCWD) {
-            MotorConfig centralMotor {
-                .mode = settings.centralDriveTrainType,
-                .pwmChannel = LEDC_CHANNEL_0,
-                .dshot = centralESC
-            };
-            setMotorOutput(centralMotor, valueCentral);
-
-        } else {
-            if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) {
-                MotorConfig frontLeftCfg  = { settings.frontDriveTrainType, LEDC_CHANNEL_0, leftFrontESC };
-                MotorConfig frontRightCfg = { settings.frontDriveTrainType, LEDC_CHANNEL_1, rightFrontESC };
-                
-                setMotorOutput(frontLeftCfg, valueFrontLeft);
-                setMotorOutput(frontRightCfg, valueFrontRight);
-            }
-
-            if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) {
-                MotorConfig rearLeftCfg  = { settings.rearDriveTrainType, LEDC_CHANNEL_2, leftRearESC };
-                MotorConfig rearRightCfg = { settings.rearDriveTrainType, LEDC_CHANNEL_3, rightRearESC };
-                
-                setMotorOutput(rearLeftCfg, valueRearLeft);
-                setMotorOutput(rearRightCfg, valueRearRight);
-            }
+        if (settings.driveMode == DRIVE_MODE_XCWD &&
+            settings.centralDriveTrainType != MOTOR_MODE_PWM) {
+            setMotorDShotOutput(MOTOR_CENTRAL, centralESC, valueCentral, settings.centralDriveTrainType);
         }
 
-        // Update Servo from input
-        setPWMDutyUs(LEDC_CHANNEL_4, InputsController::instance().getRawValueForChan(1) + settings.steeringTrim * 5);
+        if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) &&
+            settings.frontDriveTrainType != MOTOR_MODE_PWM) {
+            setMotorDShotOutput(MOTOR_FRONT_LEFT, leftFrontESC, valueFrontLeft, settings.frontDriveTrainType);
+            setMotorDShotOutput(MOTOR_FRONT_RIGHT, rightFrontESC, valueFrontRight, settings.frontDriveTrainType);
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) &&
+            settings.rearDriveTrainType != MOTOR_MODE_PWM) {
+            setMotorDShotOutput(MOTOR_REAR_LEFT, leftRearESC, valueRearLeft, settings.rearDriveTrainType);
+            setMotorDShotOutput(MOTOR_REAR_RIGHT, rightRearESC, valueRearRight, settings.rearDriveTrainType);
+        }
+
+        taskYIELD();
     }
 }
 
+void OutputsController::setMotorPWMOutput(ledc_channel_t channel, float normalized) {
+    setPWMDutyUs(channel, normalizedToPwmUs(normalized));
+}
 
-// void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) {
-//     static bool timerInitialized = false;
+void OutputsController::pwmTaskLoop() {
+    while (true) {
+        const auto& settings = SettingsController::instance().get();
 
-//     if (!timerInitialized) {
-//         ledc_timer_config_t timer_conf;
-//         timer_conf.speed_mode       = LEDC_LOW_SPEED_MODE;
-//         timer_conf.timer_num        = LEDC_TIMER_0;
-//         timer_conf.duty_resolution  = LEDC_TIMER_13_BIT;
-//         timer_conf.freq_hz          = 50;
-//         timer_conf.clk_cfg          = LEDC_AUTO_CLK;
-// #if ESP_IDF_VERSION_MAJOR >= 5
-//         timer_conf.deconfigure      = false;
-// #endif
-//         ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
-//         timerInitialized = true;
-//     }
+        if (settings.driveMode == DRIVE_MODE_XCWD &&
+            settings.centralDriveTrainType == MOTOR_MODE_PWM) {
+            setMotorPWMOutput(LEDC_CHANNEL_0, valueCentral);
+        }
 
-//     ledc_channel_config_t channel_conf;
-//     channel_conf.speed_mode = LEDC_LOW_SPEED_MODE;
-//     channel_conf.channel    = channel;
-//     channel_conf.timer_sel  = LEDC_TIMER_0;
-//     channel_conf.intr_type  = LEDC_INTR_DISABLE;
-//     channel_conf.gpio_num   = gpio;
-//     channel_conf.duty       = 0;
-//     channel_conf.hpoint     = 0;
+        if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) &&
+            settings.frontDriveTrainType == MOTOR_MODE_PWM) {
+            setMotorPWMOutput(LEDC_CHANNEL_0, valueFrontLeft);
+            setMotorPWMOutput(LEDC_CHANNEL_1, valueFrontRight);
+        }
 
-//     ESP_ERROR_CHECK(ledc_channel_config(&channel_conf));
-// }
+        if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) &&
+            settings.rearDriveTrainType == MOTOR_MODE_PWM) {
+            setMotorPWMOutput(LEDC_CHANNEL_2, valueRearLeft);
+            setMotorPWMOutput(LEDC_CHANNEL_3, valueRearRight);
+        }
+
+        // Servo
+        setPWMDutyUs(
+            LEDC_CHANNEL_4,
+            InputsController::instance().getRawValueForChan(1) + settings.steeringTrim * 5
+        );
+
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
 
 void OutputsController::pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio) {
     static bool timerInitialized = false;
@@ -208,15 +208,24 @@ void OutputsController::start() {
         }
     }
 
-    xTaskCreatePinnedToCore([](void *param) {
-        OutputsController::instance().updateTaskLoop();
-    }, "dShot_task", 4096, nullptr, 1, &this->updateTaskHandle, 1);
+    xTaskCreatePinnedToCore([](void*) {
+        OutputsController::instance().pwmTaskLoop();
+        vTaskDelete(nullptr);
+    }, "PWMTask", 4096, nullptr, 1, &this->pwmTaskHandle, 1);
+
+    // xTaskCreatePinnedToCore([](void*) {
+    //     OutputsController::instance().dshotTaskLoop();
+    //     vTaskDelete(nullptr);
+    // }, "DShotTask", 4096, nullptr, 0, &this->dshotTaskHandle, 1);
+
+    startDshotTimer();
 
     //delay to arm ESCs
     vTaskDelay(pdMS_TO_TICKS(5000));
 
 
     xTaskCreatePinnedToCore(telemetryTaskEntry, "outputs_telemetry_task", 4096, nullptr, 1, &telemetryTaskHandle, 1);
+    
 }
 
 void OutputsController::startStreamingTelemetry() {
@@ -251,14 +260,25 @@ void OutputsController::telemetryTaskLoop() {
             // Write motor output
             if (settings.driveMode == DRIVE_MODE_XCWD) {
                 writeOutput(0x05, valueCentral, settings.centralDriveTrainType);
+                if (settings.centralDriveTrainType == MOTOR_MODE_BDSHOT) {
+                    writer.addUInt32(0x15, currentRPM[MOTOR_CENTRAL]);
+                }                
             } else {
                 if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) {
                     writeOutput(0x03, valueFrontLeft, settings.frontDriveTrainType);
                     writeOutput(0x04, valueFrontRight, settings.frontDriveTrainType);
+                    if (settings.frontDriveTrainType == MOTOR_MODE_BDSHOT) {
+                        writer.addUInt32(0x13, currentRPM[MOTOR_FRONT_LEFT]);
+                        writer.addUInt32(0x14, currentRPM[MOTOR_FRONT_RIGHT]);
+                    }
                 }
                 if (settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) {
                     writeOutput(0x01, valueRearLeft, settings.rearDriveTrainType);
                     writeOutput(0x02, valueRearRight, settings.rearDriveTrainType);
+                    if (settings.rearDriveTrainType == MOTOR_MODE_BDSHOT) {
+                        writer.addUInt32(0x11, currentRPM[MOTOR_REAR_LEFT]);
+                        writer.addUInt32(0x12, currentRPM[MOTOR_REAR_RIGHT]);
+                    }                    
                 }
             }
 
@@ -273,10 +293,16 @@ void OutputsController::telemetryTaskLoop() {
 }
 
 void OutputsController::stop() {
-    if (updateTaskHandle) {
-        vTaskDelete(updateTaskHandle);
-        updateTaskHandle = nullptr;
+    if (dshotTaskHandle) {
+        vTaskDelete(dshotTaskHandle);
+        dshotTaskHandle = nullptr;
     }
+
+    if (pwmTaskHandle) {
+        vTaskDelete(pwmTaskHandle);
+        pwmTaskHandle = nullptr;
+    }
+
 
     if (telemetryTaskHandle) {
         vTaskDelete(telemetryTaskHandle);
@@ -306,4 +332,44 @@ void OutputsController::stop() {
 void OutputsController::restart() {
     stop();
     start();
+}
+
+
+void IRAM_ATTR dshot_timer_callback(void* arg) {
+    OutputsController::instance().dshotTick();
+}
+
+void OutputsController::startDshotTimer() {
+    const esp_timer_create_args_t timer_args = {
+        .callback = &dshot_timer_callback,
+        .arg = nullptr,
+        .name = "dshot_timer"
+    };
+
+    esp_timer_handle_t timer;
+    esp_timer_create(&timer_args, &timer);
+
+    // 100 µs
+    esp_timer_start_periodic(timer, 100);
+}
+
+void OutputsController::dshotTick() {
+    const auto& settings = SettingsController::instance().get();
+
+    if (settings.driveMode == DRIVE_MODE_XCWD &&
+        settings.centralDriveTrainType != MOTOR_MODE_PWM) {
+        setMotorDShotOutput(MOTOR_CENTRAL, centralESC, valueCentral, settings.centralDriveTrainType);
+    }
+
+    if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_FIWD) &&
+        settings.frontDriveTrainType != MOTOR_MODE_PWM) {
+        setMotorDShotOutput(MOTOR_FRONT_LEFT, leftFrontESC, valueFrontLeft, settings.frontDriveTrainType);
+        setMotorDShotOutput(MOTOR_FRONT_RIGHT, rightFrontESC, valueFrontRight, settings.frontDriveTrainType);
+    }
+
+    if ((settings.driveMode == DRIVE_MODE_AIWD || settings.driveMode == DRIVE_MODE_RIWD) &&
+        settings.rearDriveTrainType != MOTOR_MODE_PWM) {
+        setMotorDShotOutput(MOTOR_REAR_LEFT, leftRearESC, valueRearLeft, settings.rearDriveTrainType);
+        setMotorDShotOutput(MOTOR_REAR_RIGHT, rightRearESC, valueRearRight, settings.rearDriveTrainType);
+    }
 }

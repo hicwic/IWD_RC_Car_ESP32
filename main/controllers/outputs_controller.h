@@ -39,9 +39,20 @@ struct MotorConfig {
     DShotRMT* dshot;
 };
 
+enum MotorIndex {
+    MOTOR_CENTRAL = 0,
+    MOTOR_FRONT_LEFT,
+    MOTOR_FRONT_RIGHT,
+    MOTOR_REAR_LEFT,
+    MOTOR_REAR_RIGHT,
+    MOTOR_COUNT
+};
+
 class OutputsController {
 public:
     static OutputsController& instance();
+
+    uint32_t currentRPM[MOTOR_COUNT];
 
     volatile float valueCentral = 0;
     volatile float valueRearLeft = 0;
@@ -57,6 +68,7 @@ public:
     void startStreamingTelemetry();
     void stopStreamingTelemetry();
 
+    void dshotTick();
 
 private:
     OutputsController() = default;
@@ -71,17 +83,24 @@ private:
     int normalizedToPwmUs(float normalized);
 
     void initMotor(uint8_t mode, ledc_channel_t channel, gpio_num_t gpio, DShotRMT*& esc);
-    void setMotorOutput(const MotorConfig& cfg, float normalized);
     void pwmInitChannel(ledc_channel_t channel, gpio_num_t gpio);
     void setPWMDutyUs(ledc_channel_t channel, int us);
 
-    void updateTaskLoop();
-    TaskHandle_t updateTaskHandle = nullptr;
+    void setMotorDShotOutput(MotorIndex index, DShotRMT* esc, float normalized, uint8_t mode);
+    void setMotorPWMOutput(ledc_channel_t channel, float normalized);
+
+    void dshotTaskLoop();
+    void pwmTaskLoop();
+
+    TaskHandle_t dshotTaskHandle = nullptr;
+    TaskHandle_t pwmTaskHandle = nullptr;    
 
     void telemetryTaskLoop();
     static void telemetryTaskEntry(void*);
     TaskHandle_t telemetryTaskHandle = nullptr;
     bool streamingTelemetry = false;
+
+    void startDshotTimer();
 
 };
 

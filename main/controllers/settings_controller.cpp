@@ -106,9 +106,9 @@ void SettingsController::encode(uint8_t* out, size_t& len) {
     writer.addUint8(0x02, settings.driveMode);
     writer.addBool(0x03, settings.enableRamping);
     writer.addBool(0x04, settings.enableCoasting);
-    writer.addBool(0x05, settings.centralDriveTrainType);
-    writer.addBool(0x07, settings.frontDriveTrainType);
-    writer.addBool(0x09, settings.rearDriveTrainType);
+    writer.addUint8(0x05, settings.centralDriveTrainType);
+    writer.addUint8(0x07, settings.frontDriveTrainType);
+    writer.addUint8(0x09, settings.rearDriveTrainType);
     writer.addUint8(0x06, settings.frontDiffFactor);
     writer.addUint8(0x08, settings.rearDiffFactor);
     writer.addUint8(0x0A, settings.middleDiffRatio);
